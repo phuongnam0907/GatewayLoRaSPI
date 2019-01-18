@@ -9,8 +9,15 @@ import com.google.android.things.pio.Gpio;
 import com.google.android.things.pio.PeripheralManager;
 import com.google.android.things.pio.SpiDevice;
 
+import java.io.BufferedReader;
+import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.sql.Timestamp;
 import java.util.Calendar;
+import java.util.Date;
 import java.util.Timer;
 import java.util.TimerTask;
 
@@ -52,7 +59,12 @@ public class MainActivity extends Activity {
     private int _packetIndex;
     private int _implicitHeaderMode;
 
+    /**
+    * Public variable in this MainActivity.java
+    */
     Timer newLoop;
+    int packetLength = 0;
+
 
     public static final byte REG_FIFO                   = (byte) 0x00;
     public static final byte REG_OP_MODE                = (byte) 0x01;
@@ -217,8 +229,12 @@ public class MainActivity extends Activity {
                 MainActivity.this.runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-//                        Log.d(TAG, "Start loop!!!");
-                        LoRaReceive();
+//                        LoRaReceive();
+                        byte[] data = new byte[MAX_PKT_LENGTH];
+                        data = recvByte();
+                        int len = getLength();
+                        parseJSON(data[0], data[1], data[2], data[3], data[4], data[5]);
+                        delay(3000);
 //                        counter++;
 //                        LoRaSender("phuongnam0907@gmail.com/?value:= " + counter);
 //                        int size = parsePacket(0);
@@ -230,7 +246,96 @@ public class MainActivity extends Activity {
                 });
             }
         };
-        newLoop.schedule(timerTask,1000,500);
+        newLoop.schedule(timerTask,1000,50);
+    }
+
+    /***************************************************************
+     *
+     *                PARSE AND UPDATE DATA ON SERVER
+     *
+     ***************************************************************/
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        // Begin listening for interrupt events
+        updatetimer();
+    }
+
+    private String header_1 ="[{\"gateway\":\"1\",\"sensor\":[";
+    private String result = header_1;
+    Timer updateTimer;
+    Timestamp timestamp;
+
+    public void parseJSON(byte gatewayid, byte id, byte hum, byte humf, byte tem, byte temf){
+
+    }
+
+    public void updatetimer(){
+        updateTimer = new Timer();
+        TimerTask update = new TimerTask() {
+            @Override
+            public void run() {
+
+                MainActivity.this.runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        updateData();
+                    }
+                });
+            }
+        };
+        updateTimer.schedule(update,10000,15000);
+    }
+
+    private void updateData(){
+        Thread thread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try{
+                    Date date = new Date();
+                    result = result.substring(0,result.length()-1);
+                    result += "],\"time\":" + date.getTime()/1000 + "}]";
+
+                    URL url = new URL("http://192.168.0.10:80/backend/post.php");
+                    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("POST");
+                    conn.setRequestProperty("Content-Type", "application/json;charset=UTF-8");
+                    conn.setRequestProperty("Accept","application/json");
+                    conn.setDoOutput(true);
+                    conn.setDoInput(true);
+
+                    DataOutputStream os = new DataOutputStream(conn.getOutputStream());
+
+                    os.writeBytes(result.toString());
+                    Log.d("json: ", result);
+                    os.flush();
+                    os.close();
+
+                    BufferedReader in=new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                    StringBuffer sb = new StringBuffer("");
+                    String line="";
+
+                    while((line = in.readLine()) != null) {
+
+                        sb.append(line);
+                        break;
+                    }
+
+                    in.close();
+                    Log.d("phuongnam0907 response",sb.toString());
+
+                    conn.disconnect();
+
+                    result = "";
+                    result = header_1;
+
+                }catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        });
+        thread.start();
     }
 
     /***************************************************************
@@ -276,6 +381,26 @@ public class MainActivity extends Activity {
 
             Log.d(TAG,dataTemp);
         }
+    }
+
+    public byte[] recvByte(){
+        int packetSize = parsePacket(0);
+        packetLength = 0;
+        byte[] dataTemp = new byte[MAX_PKT_LENGTH];
+        if (packetSize > 0) {
+            // read packet
+            int i = 0;
+            while (available() > 0) {
+                dataTemp[i] = (byte) read();
+                i++;
+            }
+            packetLength = i;
+        }
+        return dataTemp;
+    }
+
+    public int getLength(){
+        return packetLength;
     }
 
     /***************************************************************
